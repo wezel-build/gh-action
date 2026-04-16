@@ -1,0 +1,27 @@
+name: 'Wezel'
+description: 'Build regression detection — run experiments, detect regressions, bisect to find the culprit commit'
+branding:
+  icon: 'activity'
+  color: 'orange'
+
+inputs:
+  branch:
+    description: 'Branch to track for regressions'
+    required: false
+    default: 'main'
+  threshold:
+    description: 'Regression threshold as a percentage'
+    required: false
+    default: '10'
+  wezel-version:
+    description: 'Version of wezel to install (e.g. "0.1.0"). Defaults to latest.'
+    required: false
+    default: 'latest'
+  github-token:
+    description: 'GitHub token for creating issues and dispatching workflows'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
