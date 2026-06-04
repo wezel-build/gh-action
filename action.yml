@@ -1,26 +1,45 @@
 name: 'Wezel'
-description: 'Build regression detection — run experiments, detect regressions, bisect to find the culprit commit'
+description: 'Build regression detection — claim and run queued experiments, reporting results to Wezel'
 branding:
   icon: 'activity'
   color: 'orange'
 
 inputs:
-  branch:
-    description: 'Branch to track for regressions'
+  token:
+    description: 'Wezel API token (wez_live_…), project-scoped. Store it as a repository secret.'
+    required: true
+  api-url:
+    description: 'Wezel API base URL.'
     required: false
-    default: 'main'
-  threshold:
-    description: 'Regression threshold as a percentage'
+    default: 'https://api.wezel.build'
+  project-dir:
+    description: 'Directory containing the project''s .wezel/ config.'
     required: false
-    default: '10'
+    default: '.'
   wezel-version:
-    description: 'Version of wezel to install (e.g. "0.1.0"). Defaults to latest.'
+    description: 'Version of wezel to install (e.g. "0.1.0"). Defaults to the latest stable release.'
     required: false
     default: 'latest'
+  self-dispatch:
+    description: >-
+      After processing a run, re-dispatch this workflow to claim the next one,
+      draining the queue (including bisection midpoints) without waiting for the
+      next scheduled tick. Requires the workflow to have a `workflow_dispatch`
+      trigger and `permissions: actions: write`.
+    required: false
+    default: 'true'
   github-token:
-    description: 'GitHub token for creating issues and dispatching workflows'
+    description: 'Token used to download releases and re-dispatch the workflow.'
     required: false
     default: ${{ github.token }}
+
+outputs:
+  claimed:
+    description: 'Whether a run was claimed and processed ("true"/"false").'
+  status:
+    description: 'Run status — "complete" or "failed" (empty when nothing was claimed).'
+  run-id:
+    description: 'The claimed run id (empty when nothing was claimed).'
 
 runs:
   using: 'node20'

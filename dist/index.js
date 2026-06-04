@@ -1,6 +1,86 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ 3604:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.dispatchSelf = dispatchSelf;
+const core = __importStar(__nccwpck_require__(7484));
+const github = __importStar(__nccwpck_require__(3228));
+/**
+ * Re-dispatch the currently-running workflow so it claims the next queued run.
+ *
+ * Relies on `workflow_dispatch` being exempt from the rule that blocks
+ * `GITHUB_TOKEN`-triggered events from spawning new runs, so the default token
+ * chains the workflow as long as it has `permissions: actions: write`. Failures
+ * are downgraded to warnings — the queue still drains on the next scheduled run.
+ */
+async function dispatchSelf(token) {
+    // GITHUB_WORKFLOW_REF looks like "owner/repo/.github/workflows/ci.yml@refs/heads/main".
+    const workflowRef = process.env.GITHUB_WORKFLOW_REF;
+    const workflowFile = workflowRef
+        ? workflowRef.split("/").pop()?.split("@")[0]
+        : undefined;
+    if (!workflowFile) {
+        core.warning("Could not determine the workflow file for self-dispatch; the queue will drain on the next scheduled run.");
+        return;
+    }
+    const octokit = github.getOctokit(token);
+    const { owner, repo } = github.context.repo;
+    try {
+        await octokit.rest.actions.createWorkflowDispatch({
+            owner,
+            repo,
+            workflow_id: workflowFile,
+            ref: github.context.ref,
+        });
+        core.info(`Re-dispatched ${workflowFile} to process the next run.`);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        core.warning(`Self-dispatch failed (${message}). Ensure the workflow has a \`workflow_dispatch\` trigger and \`permissions: actions: write\`. The queue will drain on the next scheduled run.`);
+    }
+}
+//# sourceMappingURL=dispatch.js.map
+
+/***/ }),
+
 /***/ 1188:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -43,68 +123,80 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const install_1 = __nccwpck_require__(8755);
-const report_1 = __nccwpck_require__(5444);
+const dispatch_1 = __nccwpck_require__(3604);
 async function run() {
-    const branch = core.getInput("branch");
-    const threshold = core.getInput("threshold");
+    const token = core.getInput("token", { required: true });
+    const apiUrl = core.getInput("api-url");
+    const projectDir = core.getInput("project-dir");
     const wezelVersion = core.getInput("wezel-version");
-    const token = core.getInput("github-token");
-    // 1. Install wezel.
-    await core.group("Install wezel", () => (0, install_1.installWezel)(wezelVersion));
-    // 2. Run standalone mode.
+    const selfDispatch = core.getBooleanInput("self-dispatch");
+    const githubToken = core.getInput("github-token");
+    await core.group("Install wezel", () => (0, install_1.installWezel)(wezelVersion, githubToken));
+    // Env for every wezel invocation. WEZEL_API_TOKEN is project-scoped, so the
+    // server picks the queue from it — no upstream is sent.
+    const env = {
+        ...process.env,
+        WEZEL_API_URL: apiUrl,
+        WEZEL_API_TOKEN: token,
+        RUST_LOG: process.env.RUST_LOG ?? "info",
+    };
+    await core.group("Sync foragers", async () => {
+        await exec.exec("wezel", ["project", "tool", "sync", "--project-dir", projectDir], { env });
+    });
     let stdout = "";
-    let stderr = "";
-    const exitCode = await core.group("Run experiments", () => exec.exec("wezel", [
+    const code = await core.group("Claim and run next experiment", () => exec.exec("wezel", [
         "experiment",
-        "daemon",
-        "standalone",
-        "--repo-dir",
-        ".",
-        "--branch",
-        branch,
-        "--threshold",
-        threshold,
+        "next",
+        "--project-dir",
+        projectDir,
+        "--output-format",
+        "json",
     ], {
-        listeners: {
-            stdout: (data) => {
-                stdout += data.toString();
-            },
-            stderr: (data) => {
-                stderr += data.toString();
-            },
-        },
+        env,
         ignoreReturnCode: true,
-        env: {
-            ...process.env,
-            RUST_LOG: "info",
-        },
+        listeners: { stdout: (data) => (stdout += data.toString()) },
     }));
-    if (exitCode !== 0) {
-        core.error(`wezel exited with code ${exitCode}`);
-        if (stderr) {
-            core.error(stderr);
-        }
-        core.setFailed("wezel experiment daemon standalone failed");
+    // A nonzero exit is an infrastructure failure (bad config/token, server
+    // unreachable) — measurement failures exit 0 with status "failed".
+    if (code !== 0) {
+        core.setFailed(`wezel experiment next exited with code ${code}`);
         return;
     }
-    // 3. Parse report.
-    const report = (0, report_1.parseReport)(stdout);
-    core.info(`Report: ${report.results.length} experiment(s) processed`);
-    for (const result of report.results) {
-        core.info(`  ${result.experiment}: ${result.action}`);
+    const result = parseResult(stdout);
+    core.setOutput("claimed", String(result.claimed));
+    core.setOutput("status", result.status ?? "");
+    core.setOutput("run-id", result.run_id != null ? String(result.run_id) : "");
+    if (!result.claimed) {
+        core.info("Queue empty — nothing to do.");
+        return;
     }
-    // 4. Open issues for culprits.
-    const culprits = (0, report_1.getCulprits)(report);
-    for (const culprit of culprits) {
-        await (0, report_1.openIssue)(token, culprit);
+    const where = `run ${result.run_id} (${result.experiment} @ ${result.commit?.slice(0, 7)})`;
+    if (result.status === "failed") {
+        core.warning(`${where} failed: ${result.error ?? "unknown error"}`);
     }
-    // 5. Re-dispatch if bisection is in progress.
-    if ((0, report_1.needsRedispatch)(report)) {
-        core.info("Bisection in progress — dispatching next step");
-        await (0, report_1.dispatchWorkflow)(token);
+    else {
+        core.info(`Processed ${where}: complete`);
     }
-    // 6. Set outputs.
-    core.setOutput("report", JSON.stringify(report));
+    // A run was processed, so more work likely remains — a bisection just
+    // enqueued its next midpoint, or other runs are queued. Re-dispatch to keep
+    // draining. (Keyed on `claimed`, not `queue_pending`, which burrow still
+    // stubs to false; the only cost is one final empty run per drain.)
+    if (selfDispatch) {
+        await core.group("Re-dispatch for next run", () => (0, dispatch_1.dispatchSelf)(githubToken));
+    }
+}
+function parseResult(stdout) {
+    // Take the last non-empty line so any stray output can't break parsing.
+    const line = stdout
+        .trim()
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .pop();
+    if (!line) {
+        throw new Error("no JSON output from `wezel experiment next`");
+    }
+    return JSON.parse(line);
 }
 run().catch((error) => {
     core.setFailed(error instanceof Error ? error.message : String(error));
@@ -158,219 +250,94 @@ const tc = __importStar(__nccwpck_require__(3472));
 const exec = __importStar(__nccwpck_require__(5236));
 const os = __importStar(__nccwpck_require__(857));
 const path = __importStar(__nccwpck_require__(6928));
-function getPlatform() {
+const fs_1 = __nccwpck_require__(9896);
+const REPO = "wezel-build/wezel";
+/** cargo-dist target triple for the current runner. */
+function target() {
     const platform = os.platform();
     const arch = os.arch();
-    let targetOs;
-    let targetArch;
-    let ext;
-    switch (platform) {
-        case "linux":
-            targetOs = "unknown-linux-gnu";
-            ext = "tar.xz";
-            break;
-        case "darwin":
-            targetOs = "apple-darwin";
-            ext = "tar.xz";
-            break;
-        default:
-            throw new Error(`Unsupported platform: ${platform}`);
+    const targetOs = platform === "linux"
+        ? "unknown-linux-gnu"
+        : platform === "darwin"
+            ? "apple-darwin"
+            : null;
+    if (!targetOs) {
+        throw new Error(`Unsupported platform: ${platform}`);
     }
-    switch (arch) {
-        case "x64":
-            targetArch = "x86_64";
-            break;
-        case "arm64":
-            targetArch = "aarch64";
-            break;
-        default:
-            throw new Error(`Unsupported architecture: ${arch}`);
+    const targetArch = arch === "x64" ? "x86_64" : arch === "arm64" ? "aarch64" : null;
+    if (!targetArch) {
+        throw new Error(`Unsupported architecture: ${arch}`);
     }
-    return { os: `${targetArch}-${targetOs}`, arch: targetArch, ext };
+    return `${targetArch}-${targetOs}`;
 }
-async function getLatestVersion() {
-    let output = "";
-    await exec.exec("gh", [
-        "release", "view", "--repo", "wezel-build/wezel", "--json", "tagName", "-q", ".tagName",
-    ], {
-        listeners: { stdout: (data) => { output += data.toString(); } },
+async function gh(args, token) {
+    let stdout = "";
+    await exec.exec("gh", args, {
+        env: { ...process.env, GH_TOKEN: token },
+        listeners: { stdout: (data) => (stdout += data.toString()) },
         silent: true,
     });
-    return output.trim();
+    return stdout.trim();
 }
-async function installWezel(version) {
-    const { os: target, ext } = getPlatform();
-    if (version === "latest") {
-        version = await getLatestVersion();
-        core.info(`Latest wezel version: ${version}`);
+/** The latest stable (non-prerelease) release tag. */
+async function latestStableVersion(token) {
+    return gh(["release", "view", "--repo", REPO, "--json", "tagName", "-q", ".tagName"], token);
+}
+/** Recursively locate a binary named `name` under `dir`. */
+async function findBinary(dir, name) {
+    for (const entry of await fs_1.promises.readdir(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            const found = await findBinary(full, name);
+            if (found)
+                return found;
+        }
+        else if (entry.name === name) {
+            return full;
+        }
     }
-    // Check tool cache first.
+    return null;
+}
+async function installWezel(version, token) {
+    const tgt = target();
+    if (version === "latest") {
+        version = await latestStableVersion(token);
+        core.info(`Latest wezel release: ${version}`);
+    }
     const cached = tc.find("wezel", version);
     if (cached) {
         core.info(`Using cached wezel ${version}`);
         core.addPath(cached);
-        return cached;
+        return;
     }
-    // Download from GitHub releases.
-    // cargo-dist names archives like: wezel-{version}-{target}.tar.xz
-    const tag = version.startsWith("v") ? version : version;
-    const archiveName = `wezel-${tag}-${target}.${ext}`;
-    const url = `https://github.com/wezel-build/wezel/releases/download/${tag}/${archiveName}`;
-    core.info(`Downloading wezel from ${url}`);
-    const downloadPath = await tc.downloadTool(url);
-    let extractedPath;
-    if (ext === "tar.xz") {
-        extractedPath = await tc.extractTar(downloadPath, undefined, ["xJ"]);
+    // Download whatever cargo-dist named the tarball for this target, rather than
+    // hard-coding its archive naming scheme.
+    const downloadDir = await fs_1.promises.mkdtemp(path.join(os.tmpdir(), "wezel-dl-"));
+    await exec.exec("gh", [
+        "release",
+        "download",
+        version,
+        "--repo",
+        REPO,
+        "--pattern",
+        `*${tgt}*.tar.xz`,
+        "--dir",
+        downloadDir,
+    ], { env: { ...process.env, GH_TOKEN: token } });
+    const archive = (await fs_1.promises.readdir(downloadDir)).find((f) => f.endsWith(".tar.xz"));
+    if (!archive) {
+        throw new Error(`no archive matching ${tgt} in release ${version}`);
     }
-    else {
-        extractedPath = await tc.extractTar(downloadPath);
+    const extracted = await tc.extractTar(path.join(downloadDir, archive), undefined, ["xJ"]);
+    const binary = await findBinary(extracted, "wezel");
+    if (!binary) {
+        throw new Error(`wezel binary not found in archive ${archive}`);
     }
-    // cargo-dist extracts to a directory named like the archive (minus extension).
-    const innerDir = path.join(extractedPath, archiveName.replace(`.${ext}`, ""));
-    // Cache for future runs.
-    const cachedDir = await tc.cacheDir(innerDir, "wezel", version);
+    const cachedDir = await tc.cacheDir(path.dirname(binary), "wezel", version);
     core.addPath(cachedDir);
     core.info(`wezel ${version} installed to ${cachedDir}`);
-    return cachedDir;
 }
 //# sourceMappingURL=install.js.map
-
-/***/ }),
-
-/***/ 5444:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseReport = parseReport;
-exports.needsRedispatch = needsRedispatch;
-exports.getCulprits = getCulprits;
-exports.dispatchWorkflow = dispatchWorkflow;
-exports.openIssue = openIssue;
-const core = __importStar(__nccwpck_require__(7484));
-const github = __importStar(__nccwpck_require__(3228));
-function parseReport(stdout) {
-    // The CLI may print log lines before the JSON. Find the JSON object.
-    const jsonStart = stdout.indexOf("{");
-    if (jsonStart === -1) {
-        throw new Error("No JSON found in wezel output");
-    }
-    const json = stdout.slice(jsonStart);
-    return JSON.parse(json);
-}
-function needsRedispatch(report) {
-    return report.results.some((r) => r.action === "regression_detected" || r.action === "bisect_step");
-}
-function getCulprits(report) {
-    return report.results.filter((r) => r.action === "culprit_found");
-}
-async function dispatchWorkflow(token) {
-    const octokit = github.getOctokit(token);
-    const { owner, repo } = github.context.repo;
-    // Get the current workflow ID from the run.
-    const workflowRef = process.env.GITHUB_WORKFLOW_REF;
-    const workflowFile = workflowRef
-        ? workflowRef.split("/").pop()?.split("@")[0]
-        : undefined;
-    if (!workflowFile) {
-        core.warning("Could not determine workflow file for re-dispatch. " +
-            "Bisection will continue on the next scheduled run.");
-        return;
-    }
-    core.info(`Dispatching workflow ${workflowFile} for bisection continuation`);
-    await octokit.rest.actions.createWorkflowDispatch({
-        owner,
-        repo,
-        workflow_id: workflowFile,
-        ref: github.context.ref,
-    });
-}
-async function openIssue(token, result) {
-    const octokit = github.getOctokit(token);
-    const { owner, repo } = github.context.repo;
-    const d = result.details;
-    const title = `Build regression: ${result.experiment}/${d.summary_name} +${d.regression_pct?.toFixed(1)}%`;
-    const body = [
-        `## Build regression detected`,
-        ``,
-        `| | |`,
-        `|---|---|`,
-        `| **Experiment** | \`${result.experiment}\` |`,
-        `| **Summary** | \`${d.summary_name}\` |`,
-        `| **Regression** | +${d.regression_pct?.toFixed(1)}% (${d.baseline_value} → ${d.regressed_value}) |`,
-        `| **Culprit** | [\`${d.culprit?.slice(0, 7)}\`](/${owner}/${repo}/commit/${d.culprit}) — ${d.culprit_message} |`,
-        `| **Author** | ${d.culprit_author} |`,
-        ``,
-        `Detected by [Wezel](https://github.com/wezel-build/wezel).`,
-    ].join("\n");
-    // Check if an issue with the same title already exists.
-    const { data: existing } = await octokit.rest.issues.listForRepo({
-        owner,
-        repo,
-        state: "open",
-        labels: "wezel",
-    });
-    if (existing.some((issue) => issue.title === title)) {
-        core.info(`Issue already exists: ${title}`);
-        return;
-    }
-    // Ensure the "wezel" label exists.
-    try {
-        await octokit.rest.issues.getLabel({ owner, repo, name: "wezel" });
-    }
-    catch {
-        await octokit.rest.issues.createLabel({
-            owner,
-            repo,
-            name: "wezel",
-            color: "f59e0b",
-            description: "Build regression detected by Wezel",
-        });
-    }
-    const { data: issue } = await octokit.rest.issues.create({
-        owner,
-        repo,
-        title,
-        body,
-        labels: ["wezel"],
-    });
-    core.info(`Opened issue #${issue.number}: ${title}`);
-}
-//# sourceMappingURL=report.js.map
 
 /***/ }),
 

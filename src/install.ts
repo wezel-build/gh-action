@@ -3,92 +3,121 @@ import * as tc from "@actions/tool-cache";
 import * as exec from "@actions/exec";
 import * as os from "os";
 import * as path from "path";
+import { promises as fs } from "fs";
 
-function getPlatform(): { os: string; arch: string; ext: string } {
+const REPO = "wezel-build/wezel";
+
+/** cargo-dist target triple for the current runner. */
+function target(): string {
   const platform = os.platform();
   const arch = os.arch();
 
-  let targetOs: string;
-  let targetArch: string;
-  let ext: string;
-
-  switch (platform) {
-    case "linux":
-      targetOs = "unknown-linux-gnu";
-      ext = "tar.xz";
-      break;
-    case "darwin":
-      targetOs = "apple-darwin";
-      ext = "tar.xz";
-      break;
-    default:
-      throw new Error(`Unsupported platform: ${platform}`);
+  const targetOs =
+    platform === "linux"
+      ? "unknown-linux-gnu"
+      : platform === "darwin"
+        ? "apple-darwin"
+        : null;
+  if (!targetOs) {
+    throw new Error(`Unsupported platform: ${platform}`);
   }
 
-  switch (arch) {
-    case "x64":
-      targetArch = "x86_64";
-      break;
-    case "arm64":
-      targetArch = "aarch64";
-      break;
-    default:
-      throw new Error(`Unsupported architecture: ${arch}`);
+  const targetArch =
+    arch === "x64" ? "x86_64" : arch === "arm64" ? "aarch64" : null;
+  if (!targetArch) {
+    throw new Error(`Unsupported architecture: ${arch}`);
   }
 
-  return { os: `${targetArch}-${targetOs}`, arch: targetArch, ext };
+  return `${targetArch}-${targetOs}`;
 }
 
-async function getLatestVersion(): Promise<string> {
-  let output = "";
-  await exec.exec("gh", [
-    "release", "view", "--repo", "wezel-build/wezel", "--json", "tagName", "-q", ".tagName",
-  ], {
-    listeners: { stdout: (data) => { output += data.toString(); } },
+async function gh(args: string[], token: string): Promise<string> {
+  let stdout = "";
+  await exec.exec("gh", args, {
+    env: { ...process.env, GH_TOKEN: token },
+    listeners: { stdout: (data) => (stdout += data.toString()) },
     silent: true,
   });
-  return output.trim();
+  return stdout.trim();
 }
 
-export async function installWezel(version: string): Promise<string> {
-  const { os: target, ext } = getPlatform();
+/** The latest stable (non-prerelease) release tag. */
+async function latestStableVersion(token: string): Promise<string> {
+  return gh(
+    ["release", "view", "--repo", REPO, "--json", "tagName", "-q", ".tagName"],
+    token
+  );
+}
+
+/** Recursively locate a binary named `name` under `dir`. */
+async function findBinary(dir: string, name: string): Promise<string | null> {
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const found = await findBinary(full, name);
+      if (found) return found;
+    } else if (entry.name === name) {
+      return full;
+    }
+  }
+  return null;
+}
+
+export async function installWezel(
+  version: string,
+  token: string
+): Promise<void> {
+  const tgt = target();
 
   if (version === "latest") {
-    version = await getLatestVersion();
-    core.info(`Latest wezel version: ${version}`);
+    version = await latestStableVersion(token);
+    core.info(`Latest wezel release: ${version}`);
   }
 
-  // Check tool cache first.
   const cached = tc.find("wezel", version);
   if (cached) {
     core.info(`Using cached wezel ${version}`);
     core.addPath(cached);
-    return cached;
+    return;
   }
 
-  // Download from GitHub releases.
-  // cargo-dist names archives like: wezel-{version}-{target}.tar.xz
-  const tag = version.startsWith("v") ? version : version;
-  const archiveName = `wezel-${tag}-${target}.${ext}`;
-  const url = `https://github.com/wezel-build/wezel/releases/download/${tag}/${archiveName}`;
+  // Download whatever cargo-dist named the tarball for this target, rather than
+  // hard-coding its archive naming scheme.
+  const downloadDir = await fs.mkdtemp(path.join(os.tmpdir(), "wezel-dl-"));
+  await exec.exec(
+    "gh",
+    [
+      "release",
+      "download",
+      version,
+      "--repo",
+      REPO,
+      "--pattern",
+      `*${tgt}*.tar.xz`,
+      "--dir",
+      downloadDir,
+    ],
+    { env: { ...process.env, GH_TOKEN: token } }
+  );
 
-  core.info(`Downloading wezel from ${url}`);
-  const downloadPath = await tc.downloadTool(url);
-
-  let extractedPath: string;
-  if (ext === "tar.xz") {
-    extractedPath = await tc.extractTar(downloadPath, undefined, ["xJ"]);
-  } else {
-    extractedPath = await tc.extractTar(downloadPath);
+  const archive = (await fs.readdir(downloadDir)).find((f) =>
+    f.endsWith(".tar.xz")
+  );
+  if (!archive) {
+    throw new Error(`no archive matching ${tgt} in release ${version}`);
   }
 
-  // cargo-dist extracts to a directory named like the archive (minus extension).
-  const innerDir = path.join(extractedPath, archiveName.replace(`.${ext}`, ""));
+  const extracted = await tc.extractTar(
+    path.join(downloadDir, archive),
+    undefined,
+    ["xJ"]
+  );
+  const binary = await findBinary(extracted, "wezel");
+  if (!binary) {
+    throw new Error(`wezel binary not found in archive ${archive}`);
+  }
 
-  // Cache for future runs.
-  const cachedDir = await tc.cacheDir(innerDir, "wezel", version);
+  const cachedDir = await tc.cacheDir(path.dirname(binary), "wezel", version);
   core.addPath(cachedDir);
-
   core.info(`wezel ${version} installed to ${cachedDir}`);
-  return cachedDir;
 }
