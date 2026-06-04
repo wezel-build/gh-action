@@ -1,90 +1,115 @@
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { installWezel } from "./install";
-import {
-  parseReport,
-  needsRedispatch,
-  getCulprits,
-  dispatchWorkflow,
-  openIssue,
-} from "./report";
+import { dispatchSelf } from "./dispatch";
+
+/** Mirrors `wezel experiment next --output-format json`. */
+interface NextResult {
+  claimed: boolean;
+  run_id?: number;
+  experiment?: string;
+  commit?: string;
+  status?: "complete" | "failed";
+  error?: string;
+  queue_pending?: boolean;
+}
 
 async function run(): Promise<void> {
-  const branch = core.getInput("branch");
-  const threshold = core.getInput("threshold");
+  const token = core.getInput("token", { required: true });
+  const apiUrl = core.getInput("api-url");
+  const projectDir = core.getInput("project-dir");
   const wezelVersion = core.getInput("wezel-version");
-  const token = core.getInput("github-token");
+  const selfDispatch = core.getBooleanInput("self-dispatch");
+  const githubToken = core.getInput("github-token");
 
-  // 1. Install wezel.
-  await core.group("Install wezel", () => installWezel(wezelVersion));
+  await core.group("Install wezel", () =>
+    installWezel(wezelVersion, githubToken)
+  );
 
-  // 2. Run standalone mode.
+  // Env for every wezel invocation. WEZEL_API_TOKEN is project-scoped, so the
+  // server picks the queue from it — no upstream is sent.
+  const env = {
+    ...process.env,
+    WEZEL_API_URL: apiUrl,
+    WEZEL_API_TOKEN: token,
+    RUST_LOG: process.env.RUST_LOG ?? "info",
+  };
+
+  await core.group("Sync foragers", async () => {
+    await exec.exec(
+      "wezel",
+      ["project", "tool", "sync", "--project-dir", projectDir],
+      { env }
+    );
+  });
+
   let stdout = "";
-  let stderr = "";
-
-  const exitCode = await core.group("Run experiments", () =>
+  const code = await core.group("Claim and run next experiment", () =>
     exec.exec(
       "wezel",
       [
         "experiment",
-        "daemon",
-        "standalone",
-        "--repo-dir",
-        ".",
-        "--branch",
-        branch,
-        "--threshold",
-        threshold,
+        "next",
+        "--project-dir",
+        projectDir,
+        "--output-format",
+        "json",
       ],
       {
-        listeners: {
-          stdout: (data) => {
-            stdout += data.toString();
-          },
-          stderr: (data) => {
-            stderr += data.toString();
-          },
-        },
+        env,
         ignoreReturnCode: true,
-        env: {
-          ...process.env,
-          RUST_LOG: "info",
-        },
+        listeners: { stdout: (data) => (stdout += data.toString()) },
       }
     )
   );
 
-  if (exitCode !== 0) {
-    core.error(`wezel exited with code ${exitCode}`);
-    if (stderr) {
-      core.error(stderr);
-    }
-    core.setFailed("wezel experiment daemon standalone failed");
+  // A nonzero exit is an infrastructure failure (bad config/token, server
+  // unreachable) — measurement failures exit 0 with status "failed".
+  if (code !== 0) {
+    core.setFailed(`wezel experiment next exited with code ${code}`);
     return;
   }
 
-  // 3. Parse report.
-  const report = parseReport(stdout);
-  core.info(`Report: ${report.results.length} experiment(s) processed`);
+  const result = parseResult(stdout);
+  core.setOutput("claimed", String(result.claimed));
+  core.setOutput("status", result.status ?? "");
+  core.setOutput("run-id", result.run_id != null ? String(result.run_id) : "");
 
-  for (const result of report.results) {
-    core.info(`  ${result.experiment}: ${result.action}`);
+  if (!result.claimed) {
+    core.info("Queue empty — nothing to do.");
+    return;
   }
 
-  // 4. Open issues for culprits.
-  const culprits = getCulprits(report);
-  for (const culprit of culprits) {
-    await openIssue(token, culprit);
+  const where = `run ${result.run_id} (${result.experiment} @ ${result.commit?.slice(0, 7)})`;
+  if (result.status === "failed") {
+    core.warning(`${where} failed: ${result.error ?? "unknown error"}`);
+  } else {
+    core.info(`Processed ${where}: complete`);
   }
 
-  // 5. Re-dispatch if bisection is in progress.
-  if (needsRedispatch(report)) {
-    core.info("Bisection in progress — dispatching next step");
-    await dispatchWorkflow(token);
+  // A run was processed, so more work likely remains — a bisection just
+  // enqueued its next midpoint, or other runs are queued. Re-dispatch to keep
+  // draining. (Keyed on `claimed`, not `queue_pending`, which burrow still
+  // stubs to false; the only cost is one final empty run per drain.)
+  if (selfDispatch) {
+    await core.group("Re-dispatch for next run", () =>
+      dispatchSelf(githubToken)
+    );
   }
+}
 
-  // 6. Set outputs.
-  core.setOutput("report", JSON.stringify(report));
+function parseResult(stdout: string): NextResult {
+  // Take the last non-empty line so any stray output can't break parsing.
+  const line = stdout
+    .trim()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .pop();
+  if (!line) {
+    throw new Error("no JSON output from `wezel experiment next`");
+  }
+  return JSON.parse(line) as NextResult;
 }
 
 run().catch((error) => {
