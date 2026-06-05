@@ -11,9 +11,11 @@ import * as github from "@actions/github";
  */
 export async function dispatchSelf(token: string): Promise<void> {
   // GITHUB_WORKFLOW_REF looks like "owner/repo/.github/workflows/ci.yml@refs/heads/main".
+  // Strip the `@ref` first — the ref itself contains slashes — then take the
+  // workflow file's basename. (Splitting on "/" first wrongly yields "main".)
   const workflowRef = process.env.GITHUB_WORKFLOW_REF;
   const workflowFile = workflowRef
-    ? workflowRef.split("/").pop()?.split("@")[0]
+    ? workflowRef.split("@")[0].split("/").pop()
     : undefined;
 
   if (!workflowFile) {
