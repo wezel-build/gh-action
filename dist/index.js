@@ -140,6 +140,10 @@ async function run() {
         ...process.env,
         WEZEL_API_URL: apiUrl,
         WEZEL_API_TOKEN: token,
+        // wezel's fetcher (tool sync, forager downloads) authenticates GitHub
+        // requests with this — without it those calls are anonymous and hit the
+        // 60-req/hr rate limit on shared CI runner IPs.
+        GH_TOKEN: githubToken,
         RUST_LOG: process.env.RUST_LOG ?? "info",
     };
     await core.group("Sync foragers", async () => {
