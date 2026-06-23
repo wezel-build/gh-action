@@ -5,9 +5,19 @@ branding:
   color: 'orange'
 
 inputs:
+  command:
+    description: >-
+      What to do: "run" (default) claims and runs the next queued experiment;
+      "lint" validates the committed experiment config — input schemas, patch
+      applicability, and summaries — without touching the run queue. Use "lint"
+      on `pull_request` to gate `.wezel/` changes before merge.
+    required: false
+    default: 'run'
   token:
-    description: 'Wezel API token (wez_live_…), project-scoped. Store it as a repository secret.'
-    required: true
+    description: >-
+      Wezel API token (wez_live_…), project-scoped. Store it as a repository
+      secret. Required for command "run"; unused by "lint".
+    required: false
   api-url:
     description: 'Wezel API base URL.'
     required: false

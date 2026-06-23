@@ -15,12 +15,15 @@ interface NextResult {
 }
 
 async function run(): Promise<void> {
-  const token = core.getInput("token", { required: true });
+  const command = core.getInput("command") || "run";
   const apiUrl = core.getInput("api-url");
   const projectDir = core.getInput("project-dir");
   const wezelVersion = core.getInput("wezel-version");
-  const selfDispatch = core.getBooleanInput("self-dispatch");
   const githubToken = core.getInput("github-token");
+
+  // The API token claims from the queue, so it's required for `run` but
+  // irrelevant to `lint` (which only reads committed config).
+  const token = core.getInput("token", { required: command === "run" });
 
   await core.group("Install wezel", () =>
     installWezel(wezelVersion, githubToken)
@@ -28,7 +31,7 @@ async function run(): Promise<void> {
 
   // Env for every wezel invocation. WEZEL_API_TOKEN is project-scoped, so the
   // server picks the queue from it — no upstream is sent.
-  const env = {
+  const env: Record<string, string> = {
     ...process.env,
     WEZEL_API_URL: apiUrl,
     WEZEL_API_TOKEN: token,
@@ -37,7 +40,56 @@ async function run(): Promise<void> {
     // 60-req/hr rate limit on shared CI runner IPs.
     GH_TOKEN: githubToken,
     RUST_LOG: process.env.RUST_LOG ?? "info",
-  };
+  } as Record<string, string>;
+
+  switch (command) {
+    case "lint":
+      await lint(projectDir, env);
+      return;
+    case "run":
+      await drainQueue(projectDir, githubToken, env);
+      return;
+    default:
+      core.setFailed(`unknown command "${command}" — expected "run" or "lint"`);
+  }
+}
+
+/**
+ * `command: lint` — validate the committed experiment config (input schemas,
+ * patch applicability, summaries) on a PR before merge.
+ *
+ * Deliberately does NOT run `project tool sync`: lint fetches each forager's
+ * schema sidecar read-only from the committed `wezel.lock`, so it never
+ * re-locks. Sync would re-pin to the latest tags and then regenerate
+ * `schema.json` against those newer foragers — but `wezel.lock` is allowed to
+ * lag, so a sync-and-diff gate would wrongly force lock freshness. Lint's own
+ * `schema.json` staleness check already validates the bundle against the
+ * locked foragers. The patch-applicability check needs the repo checked out at
+ * the PR head, which `actions/checkout` provides by default.
+ */
+async function lint(
+  projectDir: string,
+  env: Record<string, string>
+): Promise<void> {
+  const code = await core.group("Lint experiments", () =>
+    exec.exec("wezel", ["experiment", "lint", "--project-dir", projectDir], {
+      env,
+      ignoreReturnCode: true,
+    })
+  );
+  if (code !== 0) {
+    core.setFailed(`wezel experiment lint found problems (exit code ${code})`);
+  }
+}
+
+/** `command: run` — claim and run the next queued experiment, then optionally
+ *  re-dispatch to keep draining. */
+async function drainQueue(
+  projectDir: string,
+  githubToken: string,
+  env: Record<string, string>
+): Promise<void> {
+  const selfDispatch = core.getBooleanInput("self-dispatch");
 
   await core.group("Sync foragers", async () => {
     await exec.exec(
