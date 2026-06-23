@@ -33,11 +33,41 @@ jobs:
           token: ${{ secrets.WEZEL_TOKEN }}
 ```
 
+### Linting experiments on pull requests
+
+Set `command: lint` to validate the committed `.wezel/` config on a PR —
+forager input schemas, summary definitions, and that each step's `.patch`
+applies cleanly — without touching the run queue. The job fails if lint finds
+problems. No API token is needed.
+
+```yaml
+name: Wezel lint
+on:
+  pull_request:
+    paths:
+      - ".wezel/**"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4   # patch applicability is checked against HEAD
+      - uses: wezel-build/gh-action@v1
+        with:
+          command: lint
+```
+
+Patch applicability is checked against the committed `HEAD`, so an
+`actions/checkout` step is required. `lint` does not run `wezel project tool
+sync`, so it never re-locks: a deliberately-stale `wezel.lock` is fine as long
+as every forager used by an experiment is pinned in it.
+
 ## Inputs
 
 | Input | Default | Description |
 |---|---|---|
-| `token` | — (required) | Project-scoped Wezel API token (`wez_live_…`). Store it as a secret. |
+| `command` | `run` | `run` claims and runs the next queued experiment; `lint` validates committed config (incl. patch applicability) without touching the queue. |
+| `token` | — | Project-scoped Wezel API token (`wez_live_…`). Required for `run`; unused by `lint`. Store it as a secret. |
 | `api-url` | `https://api.wezel.build` | Wezel API base URL. |
 | `project-dir` | `.` | Directory containing the project's `.wezel/` config. |
 | `wezel-version` | `latest` | wezel version to install, or `latest` for the newest stable release. |
