@@ -82,6 +82,17 @@ as every forager used by an experiment is pinned in it.
 | `status` | `complete` or `failed` (empty when nothing was claimed). |
 | `run-id` | The claimed run id (empty when nothing was claimed). |
 
+## Run backlinks
+
+Each claimed run records a link to the job that ran it, so Wezel's commit page
+can point at these logs — including for a run that died before reporting
+anything. No configuration needed: the action works out its own job URL (with
+the attempt number on a re-run) and hands it to wezel, which knows nothing about
+Actions itself.
+
+Set `WEZEL_RUN_BACKLINK` / `WEZEL_RUN_BACKLINK_LABEL` in the step's `env` to
+point somewhere more useful instead — an uploaded log artifact, say.
+
 ## Self-dispatch
 
 A single invocation processes one run. With `self-dispatch: true` (the default),
