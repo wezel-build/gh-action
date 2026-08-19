@@ -142,6 +142,11 @@ async function run() {
         ...process.env,
         WEZEL_API_URL: apiUrl,
         WEZEL_API_TOKEN: token,
+        // Where this run is executing, recorded against the claimed run so its logs
+        // stay reachable from Wezel. wezel itself knows nothing about Actions, so
+        // deriving the job URL is our job — and a caller who already set these keeps
+        // their value.
+        ...backlinkEnv(),
         // wezel's fetcher (tool sync, forager downloads) authenticates GitHub
         // requests with this — without it those calls are anonymous and hit the
         // 60-req/hr rate limit on shared CI runner IPs.
@@ -229,6 +234,31 @@ async function drainQueue(projectDir, githubToken, env) {
     if (selfDispatch) {
         await core.group("Re-dispatch for next run", () => (0, dispatch_1.dispatchSelf)(githubToken));
     }
+}
+/**
+ * `WEZEL_RUN_BACKLINK*` pointing at the job this action is running in, which
+ * wezel records against the run it claims. Empty when the caller already set a
+ * backlink, or when the `GITHUB_*` variables that identify the job are missing.
+ */
+function backlinkEnv() {
+    const { WEZEL_RUN_BACKLINK, WEZEL_RUN_BACKLINK_LABEL, GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, } = process.env;
+    if (WEZEL_RUN_BACKLINK)
+        return {};
+    if (!GITHUB_SERVER_URL || !GITHUB_REPOSITORY || !GITHUB_RUN_ID)
+        return {};
+    // The attempt segment goes on only for a re-run: without it the URL resolves
+    // to the latest attempt, which by then may be measuring a different commit.
+    const attempt = GITHUB_RUN_ATTEMPT && GITHUB_RUN_ATTEMPT !== "1"
+        ? `/attempts/${GITHUB_RUN_ATTEMPT}`
+        : "";
+    const server = GITHUB_SERVER_URL.replace(/\/+$/, "");
+    const env = {
+        WEZEL_RUN_BACKLINK: `${server}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}${attempt}`,
+    };
+    if (!WEZEL_RUN_BACKLINK_LABEL) {
+        env.WEZEL_RUN_BACKLINK_LABEL = "GitHub Actions";
+    }
+    return env;
 }
 function parseResult(stdout) {
     // Take the last non-empty line so any stray output can't break parsing.
