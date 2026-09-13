@@ -229,7 +229,7 @@ async function drainQueue(projectDir, githubToken, env) {
     }
     // A run was processed, so more work likely remains — a bisection just
     // enqueued its next midpoint, or other runs are queued. Re-dispatch to keep
-    // draining. (Keyed on `claimed`, not `queue_pending`, which burrow still
+    // draining. (Keyed on `claimed`, not `queue_pending`, which fiflok still
     // stubs to false; the only cost is one final empty run per drain.)
     if (selfDispatch) {
         await core.group("Re-dispatch for next run", () => (0, dispatch_1.dispatchSelf)(githubToken));
