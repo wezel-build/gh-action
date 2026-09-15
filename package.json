@@ -6,12 +6,12 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc && ncc build lib/index.js -o dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && tsc && node --test test/*.test.js"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
     "@actions/exec": "^1.1.1",
-    "@actions/github": "^6.0.0",
     "@actions/tool-cache": "^2.0.2"
   },
   "devDependencies": {
