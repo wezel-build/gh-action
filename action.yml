@@ -1,5 +1,5 @@
 name: 'Wezel'
-description: 'Build regression detection — claim and run queued experiments, reporting results to Wezel'
+description: 'Run an exact Fiflok-assigned experiment and report its results'
 branding:
   icon: 'activity'
   color: 'orange'
@@ -7,7 +7,7 @@ branding:
 inputs:
   command:
     description: >-
-      What to do: "run" (default) claims and runs the next queued experiment;
+      What to do: "run" (default) executes the explicitly assigned run;
       "lint" validates the committed experiment config — input schemas, patch
       applicability, and summaries — without touching the run queue. Use "lint"
       on `pull_request` to gate `.wezel/` changes before merge.
@@ -15,11 +15,17 @@ inputs:
     default: 'run'
   token:
     description: >-
-      Wezel API token (wez_live_…), project-scoped. Store it as a repository
+      Fiflok runner-scoped token. Store it as a repository
       secret. Required for command "run"; unused by "lint".
     required: false
+  run-id:
+    description: 'Exact Fiflok run ID assigned by workflow_dispatch. Required for command "run".'
+    required: false
+  experiment-name:
+    description: 'Exact experiment assigned by workflow_dispatch. Required for command "run".'
+    required: false
   api-url:
-    description: 'Wezel API base URL.'
+    description: 'Fiflok API base URL.'
     required: false
     default: 'https://api.wezel.build'
   project-dir:
@@ -30,26 +36,16 @@ inputs:
     description: 'Version of wezel to install (e.g. "0.1.0"). Defaults to the latest stable release.'
     required: false
     default: 'latest'
-  self-dispatch:
-    description: >-
-      After processing a run, re-dispatch this workflow to claim the next one,
-      draining the queue (including bisection midpoints) without waiting for the
-      next scheduled tick. Requires the workflow to have a `workflow_dispatch`
-      trigger and `permissions: actions: write`.
-    required: false
-    default: 'true'
   github-token:
-    description: 'Token used to download releases and re-dispatch the workflow.'
+    description: 'Token used to download Wezel releases.'
     required: false
     default: ${{ github.token }}
 
 outputs:
-  claimed:
-    description: 'Whether a run was claimed and processed ("true"/"false").'
   status:
-    description: 'Run status — "complete" or "failed" (empty when nothing was claimed).'
+    description: 'Run status — "complete" or "failed".'
   run-id:
-    description: 'The claimed run id (empty when nothing was claimed).'
+    description: 'The assigned run ID.'
 
 runs:
   using: 'node20'

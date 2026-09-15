@@ -1,110 +1,107 @@
 # Wezel GitHub Action
 
-Runs [Wezel](https://github.com/wezel-build/wezel) build-regression experiments
-from a workflow. Each invocation claims one queued run for your project from the
-Wezel API, measures the claimed commit, and reports the results back. Regression
-detection and bisection happen server-side; bisection midpoints are re-enqueued
-and drained by subsequent runs.
+Runs one exact experiment assigned by Fiflok. The workflow checks out the
+assigned commit, then passes Fiflok's `run-id` and `experiment-name` dispatch
+inputs to this action. The action never claims arbitrary queue work and never
+dispatches another workflow.
 
 ## Usage
 
 ```yaml
-name: Wezel
+name: Wezel assigned run
 on:
-  schedule:
-    - cron: "0 * * * *"   # hourly safety net
-  workflow_dispatch:       # required for self-dispatch (see below)
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Fiflok run ID
+        required: true
+      experiment_name:
+        description: Experiment to run
+        required: true
+      commit_sha:
+        description: Assigned commit
+        required: true
 
 permissions:
   contents: read
-  actions: write           # required for self-dispatch
-
-concurrency:
-  group: wezel
-  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
+    concurrency:
+      group: wezel-run-${{ inputs.run_id }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
       - uses: wezel-build/gh-action@v1
         with:
-          token: ${{ secrets.WEZEL_TOKEN }}
+          token: ${{ secrets.WEZEL_RUNNER_TOKEN }}
+          run-id: ${{ inputs.run_id }}
+          experiment-name: ${{ inputs.experiment_name }}
 ```
+
+The action marks the assigned run `running`, executes:
+
+```text
+wezel experiment run EXPERIMENT --run-id ID --save yes --output-format json
+```
+
+It uploads a zstd-compressed tar containing only `report.json` and the optional
+`attachments/` tree, then marks the run `complete`. Any setup, execution,
+packaging, upload, or completion error is reported as `failed` when possible.
+
+The runner image must provide `tar` and `zstd` (both are available on GitHub's
+Ubuntu-hosted runners).
 
 ### Linting experiments on pull requests
 
-Set `command: lint` to validate the committed `.wezel/` config on a PR —
-forager input schemas, summary definitions, and that each step's `.patch`
-applies cleanly — without touching the run queue. The job fails if lint finds
-problems. No API token is needed.
+`command: lint` preserves the existing local-only validation mode. It checks
+forager schemas, summaries, and patch applicability without using a token or
+touching a run.
 
 ```yaml
 name: Wezel lint
 on:
   pull_request:
-    paths:
-      - ".wezel/**"
+    paths: [".wezel/**"]
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4   # patch applicability is checked against HEAD
+      - uses: actions/checkout@v4
       - uses: wezel-build/gh-action@v1
         with:
           command: lint
 ```
 
-Patch applicability is checked against the committed `HEAD`, so an
-`actions/checkout` step is required. `lint` does not run `wezel project tool
-sync`, so it never re-locks: a deliberately-stale `wezel.lock` is fine as long
-as every forager used by an experiment is pinned in it.
+Lint does not run `wezel project tool sync`, so it does not update
+`wezel.lock`.
 
 ## Inputs
 
 | Input | Default | Description |
 |---|---|---|
-| `command` | `run` | `run` claims and runs the next queued experiment; `lint` validates committed config (incl. patch applicability) without touching the queue. |
-| `token` | — | Project-scoped Wezel API token (`wez_live_…`). Required for `run`; unused by `lint`. Store it as a secret. |
-| `api-url` | `https://api.wezel.build` | Wezel API base URL. |
-| `project-dir` | `.` | Directory containing the project's `.wezel/` config. |
-| `wezel-version` | `latest` | wezel version to install, or `latest` for the newest stable release. |
-| `self-dispatch` | `true` | After a run, re-dispatch the workflow to claim the next one. See below. |
-| `github-token` | `${{ github.token }}` | Used to download wezel releases and re-dispatch the workflow. |
+| `command` | `run` | `run` executes an assigned run; `lint` validates committed config. |
+| `token` | — | Fiflok runner-scoped token. Required for `run`; unused by `lint`. |
+| `run-id` | — | Exact Fiflok run ID. Required for `run`. |
+| `experiment-name` | — | Exact assigned experiment. Required for `run`. |
+| `api-url` | `https://api.wezel.build` | Fiflok API base URL. |
+| `project-dir` | `.` | Directory containing `.wezel/`. |
+| `wezel-version` | `latest` | Wezel version to install. |
+| `github-token` | `${{ github.token }}` | Used only to download Wezel releases. |
 
 ## Outputs
 
 | Output | Description |
 |---|---|
-| `claimed` | `"true"`/`"false"` — whether a run was processed this invocation. |
-| `status` | `complete` or `failed` (empty when nothing was claimed). |
-| `run-id` | The claimed run id (empty when nothing was claimed). |
+| `status` | `complete` or `failed`. |
+| `run-id` | Assigned run ID. |
 
 ## Run backlinks
 
-Each claimed run records a link to the job that ran it, so Wezel's commit page
-can point at these logs — including for a run that died before reporting
-anything. No configuration needed: the action works out its own job URL (with
-the attempt number on a re-run) and hands it to wezel, which knows nothing about
-Actions itself.
-
-Set `WEZEL_RUN_BACKLINK` / `WEZEL_RUN_BACKLINK_LABEL` in the step's `env` to
-point somewhere more useful instead — an uploaded log artifact, say.
-
-## Self-dispatch
-
-A single invocation processes one run. With `self-dispatch: true` (the default),
-the action re-dispatches its own workflow whenever it processed a run, so the
-queue — including bisection midpoints enqueued mid-drain — is drained promptly
-instead of one run per scheduled tick. It stops when a claim comes back empty.
-
-This requires the workflow to:
-
-- have a `workflow_dispatch` trigger, and
-- grant `permissions: actions: write`.
-
-If either is missing the action logs a warning and falls back to draining on the
-next scheduled run. Set `self-dispatch: false` to opt out and rely solely on the
-schedule.
+The action supplies `WEZEL_RUN_BACKLINK` and `WEZEL_RUN_BACKLINK_LABEL` for the
+current Actions run. Set either environment variable explicitly to override
+the generated backlink.
