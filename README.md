@@ -21,6 +21,9 @@ on:
       commit_sha:
         description: Assigned commit
         required: true
+      project_dir:
+        description: Directory containing the Wezel project
+        required: true
 
 permissions:
   contents: read
@@ -40,6 +43,7 @@ jobs:
           token: ${{ secrets.WEZEL_RUNNER_TOKEN }}
           run-id: ${{ inputs.run_id }}
           experiment-name: ${{ inputs.experiment_name }}
+          project-dir: ${{ inputs.project_dir }}
 ```
 
 The action marks the assigned run `running`, executes:
