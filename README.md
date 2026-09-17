@@ -35,10 +35,10 @@ jobs:
       group: wezel-run-${{ inputs.run_id }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.commit_sha }}
-      - uses: wezel-build/gh-action@v1.0.0
+      - uses: wezel-build/gh-action@v1.0.1
         with:
           token: ${{ secrets.WEZEL_RUNNER_TOKEN }}
           run-id: ${{ inputs.run_id }}
@@ -75,8 +75,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: wezel-build/gh-action@v1.0.0
+      - uses: actions/checkout@v7
+      - uses: wezel-build/gh-action@v1.0.1
         with:
           command: lint
 ```
