@@ -365,19 +365,6 @@ function target() {
     }
     return `${targetArch}-${targetOs}`;
 }
-async function gh(args, token) {
-    let stdout = "";
-    await exec.exec("gh", args, {
-        env: { ...process.env, GH_TOKEN: token },
-        listeners: { stdout: (data) => (stdout += data.toString()) },
-        silent: true,
-    });
-    return stdout.trim();
-}
-/** The latest stable (non-prerelease) release tag. */
-async function latestStableVersion(token) {
-    return gh(["release", "view", "--repo", REPO, "--json", "tagName", "-q", ".tagName"], token);
-}
 /** Recursively locate a binary named `name` under `dir`. */
 async function findBinary(dir, name) {
     for (const entry of await fs_1.promises.readdir(dir, { withFileTypes: true })) {
@@ -395,10 +382,6 @@ async function findBinary(dir, name) {
 }
 async function installWezel(version, token) {
     const tgt = target();
-    if (version === "latest") {
-        version = await latestStableVersion(token);
-        core.info(`Latest wezel release: ${version}`);
-    }
     const cached = tc.find("wezel", version);
     if (cached) {
         core.info(`Using cached wezel ${version}`);

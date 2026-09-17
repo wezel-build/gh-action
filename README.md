@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit_sha }}
-      - uses: wezel-build/gh-action@v1
+      - uses: wezel-build/gh-action@v1.0.0
         with:
           token: ${{ secrets.WEZEL_RUNNER_TOKEN }}
           run-id: ${{ inputs.run_id }}
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: wezel-build/gh-action@v1
+      - uses: wezel-build/gh-action@v1.0.0
         with:
           command: lint
 ```
@@ -94,7 +94,7 @@ Lint does not run `wezel project tool sync`, so it does not update
 | `experiment-name` | — | Exact assigned experiment. Required for `run`. |
 | `api-url` | `https://api.wezel.build` | Fiflok API base URL. |
 | `project-dir` | `.` | Directory containing `.wezel/`. |
-| `wezel-version` | `latest` | Wezel version to install. |
+| `wezel-version` | `v0.1.5-pre-pre.20260916103109+5a021a6` | Exact Wezel release to install. Each Action release pins the CLI version it was tested with. |
 | `github-token` | `${{ github.token }}` | Used only to download Wezel releases. |
 
 ## Outputs

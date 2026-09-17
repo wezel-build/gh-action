@@ -33,9 +33,9 @@ inputs:
     required: false
     default: '.'
   wezel-version:
-    description: 'Version of wezel to install (e.g. "0.1.0"). Defaults to the latest stable release.'
+    description: 'Exact Wezel release to install. Defaults to the version tested with this Action release.'
     required: false
-    default: 'latest'
+    default: 'v0.1.5-pre-pre.20260916103109+5a021a6'
   github-token:
     description: 'Token used to download Wezel releases.'
     required: false
